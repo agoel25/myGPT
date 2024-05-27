@@ -66,13 +66,18 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         # initialize an embedding table for every token
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
+        # initialize a positional embedding table for every token
+        self.positional_embedding_table = nn.Embedding(block_size, n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, index, targets = None):
+        B, T = index.shape
 
         # index.shape == targets.shape == (B, T)
         token_embds = self.token_embedding_table(index) # (B, T, C)
-        logits = self.lm_head(token_embds) # (B, T, vocab_size)
+        positional_embds = self.positional_embedding_table(torch.arange(T, device=device)) # (T, C)
+        x = token_embds + positional_embds # (B, T, C)
+        logits = self.lm_head(x) # (B, T, vocab_size)
 
         if targets is None:
             loss = None
@@ -88,8 +93,10 @@ class BigramLanguageModel(nn.Module):
     def generate(self, index, max_new_tokens):
         # index.shape = (B, T)
         for _ in range(max_new_tokens):
+            # crop index to last block
+            index_cropped = index[:, -block_size:]
             # get predictions
-            logits, loss = self(index)
+            logits, loss = self(index_cropped)
             # reduce to the last time dimension
             logits = logits[:, -1, :] # (B, C)
             # get probabilities by applying softmax
