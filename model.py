@@ -85,7 +85,9 @@ class MultiHeadAttention(nn.Module):
     """ multiple heads of self-attention together """
     def __init__(self, num_heads, head_size):
         super().__init__()
-        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.heads = nn.ModuleList()
+        for _ in range(num_heads):
+            self.heads.append(Head(head_size))
     
     def forward(self, x):
         return torch.cat([head(x) for head in self.heads], dim=-1)
@@ -101,7 +103,7 @@ class FeedForward(nn.Module):
 
 # initial Bigram language model
 class BigramLanguageModel(nn.Module):
-
+    """ model definition """
     def __init__(self):
         super().__init__()
         # initialize an embedding table for every token
@@ -115,7 +117,6 @@ class BigramLanguageModel(nn.Module):
 
     def forward(self, index, targets = None):
         B, T = index.shape
-
         # index.shape == targets.shape == (B, T)
         token_embds = self.token_embedding_table(index) # (B, T, C)
         positional_embds = self.positional_embedding_table(torch.arange(T, device=device)) # (T, C)
@@ -159,7 +160,6 @@ m = model.to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
 for i in range(max_iters):
-
     # every once in eval_interval iterations, calculate the average loss accross all batches on train and validation sets
     if i % eval_interval == 0:
         losses = estimate_loss()
@@ -171,9 +171,9 @@ for i in range(max_iters):
     # evaluate the loss
     logits, loss = model(xb, yb)
     optimizer.zero_grad(set_to_none=True)
-    # backward pass for the NN
+    # backward pass
     loss.backward()
-    # optimizer update step for the NN
+    # optimizer update
     optimizer.step()
 
 # generate from the model
