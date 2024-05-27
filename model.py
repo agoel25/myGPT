@@ -44,7 +44,7 @@ def get_batch(split):
     x, y = x.to(device), y.to(device) # move data to device
     return x, y
 
-# caculate weighted average loss
+# caculate weighted average loss accross batches
 @torch.no_grad()
 def estimate_loss():
     out = {}
@@ -90,6 +90,15 @@ class MultiHeadAttention(nn.Module):
     def forward(self, x):
         return torch.cat([head(x) for head in self.heads], dim=-1)
 
+class FeedForward(nn.Module):
+    """ a linear layer followed by a non-linearity (ReLU) """
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(n_embd, n_embd), nn.ReLU())
+
+    def forward(self, x):
+        return self.net(x)
+
 # initial Bigram language model
 class BigramLanguageModel(nn.Module):
 
@@ -99,7 +108,9 @@ class BigramLanguageModel(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         # initialize a positional embedding table for every token
         self.positional_embedding_table = nn.Embedding(block_size, n_embd)
-        self.sa_heads = MultiHeadAttention(4, n_embd//4) # 4 heads of 8-dimensional self-attention, post-concat becomes 32 dimentional
+        # 4 heads of 8-dimensional self-attention, post-concat becomes 32 dimentional
+        self.sa_heads = MultiHeadAttention(4, n_embd//4)
+        self.ffwd = FeedForward(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, index, targets = None):
@@ -110,6 +121,7 @@ class BigramLanguageModel(nn.Module):
         positional_embds = self.positional_embedding_table(torch.arange(T, device=device)) # (T, C)
         x = token_embds + positional_embds # (B, T, C)
         x = self.sa_heads(x) # apply one self-attention head
+        x = self.ffwd(x)
         logits = self.lm_head(x) # (B, T, vocab_size)
 
         if targets is None:
@@ -148,10 +160,10 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
 for i in range(max_iters):
 
-    # every once in eval_interval iterations, calculate the loss on train and validation sets
+    # every once in eval_interval iterations, calculate the average loss accross all batches on train and validation sets
     if i % eval_interval == 0:
         losses = estimate_loss()
-        print(f"step {i}: train loss {losses['train']:.4f}, val loss {losses['validation']:.4f}")
+        print(f"iter {i}: train loss {losses['train']:.4f}, validation loss {losses['validation']:.4f}")
 
     # sample a batch of data
     xb, yb = get_batch('train')
