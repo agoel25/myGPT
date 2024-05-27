@@ -88,31 +88,54 @@ class MultiHeadAttention(nn.Module):
         self.heads = nn.ModuleList()
         for _ in range(num_heads):
             self.heads.append(Head(head_size))
+        self.proj = nn.Linear(n_embd, n_embd) # projection for residual block
     
     def forward(self, x):
-        return torch.cat([head(x) for head in self.heads], dim=-1)
+        out = torch.cat([head(x) for head in self.heads], dim=-1)
+        out = self.proj(out)
+        return out
 
 class FeedForward(nn.Module):
     """ a linear layer followed by a non-linearity (ReLU) """
     def __init__(self, n_embd):
         super().__init__()
-        self.net = nn.Sequential(nn.Linear(n_embd, n_embd), nn.ReLU())
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),
+        )
 
     def forward(self, x):
         return self.net(x)
 
-# initial Bigram language model
+class Block(nn.Module):
+    """ transformer block: as defined in the 'attention is all you need' paper """
+    def __init__(self, n_embd, n_head):
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_embd)
+
+    def forward(self, x):
+        # self attention handles the communication between tokens, feed forward handles the computation
+        x = x + self.sa(x)
+        x = x + self.ffwd(x)
+        return x
+
 class BigramLanguageModel(nn.Module):
-    """ model definition """
+    """ language model definition """
     def __init__(self):
         super().__init__()
         # initialize an embedding table for every token
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         # initialize a positional embedding table for every token
         self.positional_embedding_table = nn.Embedding(block_size, n_embd)
-        # 4 heads of 8-dimensional self-attention, post-concat becomes 32 dimentional
-        self.sa_heads = MultiHeadAttention(4, n_embd//4)
-        self.ffwd = FeedForward(n_embd)
+        # 3 transformer blocks with 4 heads of self-attention
+        self.blocks = nn.Sequential(
+            Block(n_embd, n_head=4),
+            Block(n_embd, n_head=4),
+            Block(n_embd, n_head=4),
+        )
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, index, targets = None):
@@ -121,8 +144,7 @@ class BigramLanguageModel(nn.Module):
         token_embds = self.token_embedding_table(index) # (B, T, C)
         positional_embds = self.positional_embedding_table(torch.arange(T, device=device)) # (T, C)
         x = token_embds + positional_embds # (B, T, C)
-        x = self.sa_heads(x) # apply one self-attention head
-        x = self.ffwd(x)
+        x = self.blocks(x)
         logits = self.lm_head(x) # (B, T, vocab_size)
 
         if targets is None:
@@ -161,7 +183,7 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
 for i in range(max_iters):
     # every once in eval_interval iterations, calculate the average loss accross all batches on train and validation sets
-    if i % eval_interval == 0:
+    if i % eval_interval == 0 or iter == max_iters - 1:
         losses = estimate_loss()
         print(f"iter {i}: train loss {losses['train']:.4f}, validation loss {losses['validation']:.4f}")
 
