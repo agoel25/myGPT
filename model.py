@@ -3,14 +3,17 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 # hyperparameters
-batch_size = 32 # independent data sequences that will be processed in parallel
-block_size = 8 # context length for predictions (first block_size - 1 predictions will have smaller block_size due to lack of data)
-max_iters = 5000 # maxiumum iterations for the neural network
+batch_size = 16     # independent data sequences that will be processed in parallel
+block_size = 256    # context length for predictions (first block_size - 1 predictions will have smaller block_size due to lack of data)
+max_iters = 5000    # maxiumum iterations for the neural network
 eval_interval = 500 # number of iterations after which loss estimation will be made
-eval_iters = 200 # number of iterations for loss estimation
-learning_rate = 1e-3
+eval_iters = 200    # number of iterations for loss estimation
+n_embd = 384        # number of embeddings
+n_head = 6          # number of self-attention heads
+n_layer = 6         # number of layers in the network
+dropout_rate = 0.2       # dropout rate
+learning_rate = 3e-4
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-n_embd = 32
 
 torch.manual_seed(1337) # seed = encode('gpt') ;)
 
@@ -67,6 +70,7 @@ class Head(nn.Module):
         self.query = nn.Linear(n_embd, head_size, bias=False)
         self.value = nn.Linear(n_embd, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+        self.dropout = nn.Dropout(dropout_rate)
     
     def forward(self, x):
         B, T, C = x.shape
@@ -76,6 +80,7 @@ class Head(nn.Module):
         w = q @ k.transpose(-2, -1) * C**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
         w = w.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # tokens only have knowledge of the past tokens, not future token
         w = F.softmax(w, dim=-1)
+        w = self.dropout(w)
         # weighted aggregation of the values
         v = self.value(x) # (B,T,C)
         out = w @ v # (B, T, T) @ (B, T, C) -> (B, T, C)
@@ -89,10 +94,12 @@ class MultiHeadAttention(nn.Module):
         for _ in range(num_heads):
             self.heads.append(Head(head_size))
         self.proj = nn.Linear(n_embd, n_embd) # projection for residual block
+        self.dropout = nn.Dropout(dropout_rate)
     
     def forward(self, x):
         out = torch.cat([head(x) for head in self.heads], dim=-1)
         out = self.proj(out)
+        out = self.dropout(out)
         return out
 
 class FeedForward(nn.Module):
@@ -103,6 +110,7 @@ class FeedForward(nn.Module):
             nn.Linear(n_embd, 4 * n_embd),
             nn.ReLU(),
             nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout_rate),
         )
 
     def forward(self, x):
@@ -133,12 +141,8 @@ class BigramLanguageModel(nn.Module):
         # initialize a positional embedding table for every token
         self.positional_embedding_table = nn.Embedding(block_size, n_embd)
         # 3 transformer blocks with 4 heads of self-attention
-        self.blocks = nn.Sequential(
-            Block(n_embd, n_head=4),
-            Block(n_embd, n_head=4),
-            Block(n_embd, n_head=4),
-            nn.LayerNorm(n_embd),
-        )
+        self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
+        self.ln_final = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, index, targets = None):
@@ -148,6 +152,7 @@ class BigramLanguageModel(nn.Module):
         positional_embds = self.positional_embedding_table(torch.arange(T, device=device)) # (T, C)
         x = token_embds + positional_embds # (B, T, C)
         x = self.blocks(x)
+        x = self.ln_final(x)
         logits = self.lm_head(x) # (B, T, vocab_size)
 
         if targets is None:
@@ -180,6 +185,8 @@ class BigramLanguageModel(nn.Module):
 
 model = BigramLanguageModel()
 m = model.to(device)
+# print the number of parameters in the model
+print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
 
 # create a PyTorch optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
@@ -203,4 +210,4 @@ for i in range(max_iters):
 
 # generate from the model
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
-print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
+print(decode(m.generate(context, max_new_tokens=2000)[0].tolist()))
