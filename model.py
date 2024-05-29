@@ -1,6 +1,42 @@
+"""
+GPT model definition
+All parameter values are adopted from the config
+For reference here is OpenAI's official GPT-2 TensorFlow implementation: https://github.com/openai/gpt-2/blob/master/src/model.py
+"""
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import math
+import inspect
+from dataclasses import dataclass
+
+class LayerNorm(nn.Module):
+    """ LayerNorm with optional bias """
+    def __init__(self, dims, bias):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dims))
+        self.bias = nn.Parameter(torch.zeros(dims)) if bias else None
+
+    def forward(self, input):
+        eps = 1e-5 # epsilon value taken from pytorch layer_norm documentation
+        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, eps)
+
+class CausalSelfAttention(nn.Module):
+    """ Self attention """
+    def __init__(self, config):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0 # ensure embedding dimensionality is divisible by the number of attention heads
+
+@dataclass
+class GPTConfig:
+    vocab_size: int = 50304 # GPT-2 vocab size
+    block_size: int = 1024
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
+    dropout: float = 0.0
+    bias: bool = True
 
 # hyperparameters
 batch_size = 16     # independent data sequences that will be processed in parallel
@@ -86,50 +122,35 @@ class Head(nn.Module):
         out = w @ v # (B, T, T) @ (B, T, C) -> (B, T, C)
         return out
 
-class MultiHeadAttention(nn.Module):
-    """ multiple heads of self-attention together """
-    def __init__(self, num_heads, head_size):
+class MLP(nn.Module):
+    """ main multi layer perceptron block """
+    def __init__(self, config):
         super().__init__()
-        self.heads = nn.ModuleList()
-        for _ in range(num_heads):
-            self.heads.append(Head(head_size))
-        self.proj = nn.Linear(n_embd, n_embd) # projection for residual block
-        self.dropout = nn.Dropout(dropout_rate)
-    
-    def forward(self, x):
-        out = torch.cat([head(x) for head in self.heads], dim=-1)
-        out = self.proj(out)
-        out = self.dropout(out)
-        return out
-
-class FeedForward(nn.Module):
-    """ a linear layer followed by a non-linearity (ReLU) """
-    def __init__(self, n_embd):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_embd, 4 * n_embd),
-            nn.ReLU(),
-            nn.Linear(4 * n_embd, n_embd),
-            nn.Dropout(dropout_rate),
-        )
+        self.full_conn = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias) # fully connected linear layeer
+        self.gelu = nn.GELU() # gaussian error linear unit activation function
+        self.proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias) # projection back to original size
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        return self.net(x)
+        x = self.full_conn(x)
+        x = self.gelu(x)
+        x = self.proj(x)
+        x = self.dropout(x)
+        return x
 
 class Block(nn.Module):
     """ transformer block: as defined in the 'attention is all you need' paper """
-    def __init__(self, n_embd, n_head):
+    def __init__(self, config):
         super().__init__()
-        head_size = n_embd // n_head
-        self.sa = MultiHeadAttention(n_head, head_size)
-        self.ffwd = FeedForward(n_embd)
-        self.ln1 = nn.LayerNorm(n_embd)
-        self.ln2 = nn.LayerNorm(n_embd)
+        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.attn = CausalSelfAttention(config)
+        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.mlp = MLP(config)
 
     def forward(self, x):
-        # self attention handles the communication between tokens, feed forward handles the computation
-        x = x + self.sa(self.ln1(x))
-        x = x + self.ffwd(self.ln1(x))
+        # attention handles the communication between tokens, feed forward handles the computation
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
         return x
 
 class BigramLanguageModel(nn.Module):
