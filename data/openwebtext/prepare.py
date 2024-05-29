@@ -28,7 +28,7 @@ if __name__ == '__main__':
     tokenized = split_dataset.map(
         process,
         remove_columns=['text'],
-        desc="tokenizing",
+        desc="Tokenizing data",
         num_proc=num_workers,
     )
 
@@ -38,13 +38,13 @@ if __name__ == '__main__':
         filename = os.path.join(os.path.dirname(__file__), f'{split}.bin')
         dtype = np.uint16
         # create a memory mapped array for efficient file writing
-        arr = np.memmap(filename, dtype=dtype, mode='w+', shape=(arr_len,))
+        arr = np.memmap(filename, dtype=dtype, mode='w+', shape=(arr_len,)) 
         # splitting dataset into managable batches for processing
         total_batches = 1024
 
         # write data (ids) in batches
         idx = 0
-        for batch_idx in tqdm(range(total_batches), desc=f'writing {filename}'):
+        for batch_idx in tqdm(range(total_batches), desc=f'Writing {filename}'):
             # batch together samples for faster write
             batch = dset.shard(num_shards=total_batches, index=batch_idx, contiguous=True).with_format('numpy')
             arr_batch = np.concatenate(batch['ids'])
