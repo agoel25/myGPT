@@ -1,6 +1,7 @@
 """
 GPT model definition
 All parameter values are adopted from the config
+Every class has 2 simple functions: constructor which initializes the layer/block and forward() which handles the forward pass
 For reference here is OpenAI's official GPT-2 TensorFlow implementation: https://github.com/openai/gpt-2/blob/master/src/model.py
 """
 
