@@ -74,11 +74,11 @@ class CausalSelfAttention(nn.Module):
         output = output.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
-        output = self.resid_dropout(self.c_proj(output))
+        output = self.residual_dropout(self.proj(output))
         return output
 
 class MLP(nn.Module):
-    """ main multi layer perceptron block """
+    """ Main multi-layer perceptron block """
     def __init__(self, config):
         super().__init__()
         self.full_conn = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias) # fully connected linear layeer
@@ -94,7 +94,7 @@ class MLP(nn.Module):
         return x
 
 class Block(nn.Module):
-    """ transformer block: as defined in the 'attention is all you need' paper """
+    """ Transformer block: as defined in the 'attention is all you need' paper """
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
@@ -108,7 +108,21 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x
 
+class GPT(nn.Module):
+    """ Final generative pre-trained transformer class """
+    def __init__(self, config):
+        super.__init__()
+        assert config.vocab_size is not None
+        assert config.block_size is not None
+        self.config = config
 
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size, config.n_embd),
+            drop = nn.Dropout(config.dropout),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+        ))
 
 # hyperparameters
 batch_size = 16     # independent data sequences that will be processed in parallel
