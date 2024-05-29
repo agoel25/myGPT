@@ -113,7 +113,7 @@ class Block(nn.Module):
 class GPT(nn.Module):
     """ Generative pre-trained transformer language model """
     def __init__(self, config):
-        super.__init__()
+        super().__init__()
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
@@ -183,48 +183,27 @@ class GPT(nn.Module):
         
         return logits, loss
     
-    def generate(self, index, max_new_tokens):
+    def generate(self, index, max_new_tokens, temperature=1.0, top_k=None):
+        """ Generate function which takes in a sequence of indeces and predicts the next token in the sequence max_new_tokens times """
         # index.shape = (B, T)
         for _ in range(max_new_tokens):
             # crop index to last block
-            index_cropped = index[:, -self.config.block_size:]
-            # get predictions
+            if index.size(1) <= self.config.block_size:
+                index_cropped = index
+            else:
+                index_cropped = index[:, -self.config.block_size:]
+            # get logit predictions by forwarding the model
             logits, loss = self(index_cropped)
-            # reduce to the last time dimension
-            logits = logits[:, -1, :] # (B, C)
+            # reduce to the last time dimension and scale by the temperature
+            logits = logits[:, -1, :] / temperature # (B, C)
+            # crop the logits if only top k tokens are requested
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1))) # v is the final value
+                logits[logits < v[:, [-1]]] = -float('Inf')
             # get probabilities by applying softmax
-            probs = F.softmax(logits, dim=1) # (B, C)
+            probs = F.softmax(logits, dim=-1) # (B, C)
             # sample from the probability distribution
             next_index = torch.multinomial(probs, num_samples=1) # (B, 1)
             # append sampled index to the running sequence
             index = torch.cat((index, next_index), dim=1) # (B, T+1)
         return index
-
-model = GPT()
-m = model.to(device)
-# print the number of parameters in the model
-print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
-
-# create a PyTorch optimizer
-optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-
-for i in range(max_iters):
-    # every once in eval_interval iterations, calculate the average loss accross all batches on train and validation sets
-    if i % eval_interval == 0 or iter == max_iters - 1:
-        losses = estimate_loss()
-        print(f"iter {i}: train loss {losses['train']:.4f}, validation loss {losses['validation']:.4f}")
-
-    # sample a batch of data
-    xb, yb = get_batch('train')
-
-    # evaluate the loss
-    logits, loss = model(xb, yb)
-    optimizer.zero_grad(set_to_none=True)
-    # backward pass
-    loss.backward()
-    # optimizer update
-    optimizer.step()
-
-# generate from the model
-context = torch.zeros((1, 1), dtype=torch.long, device=device)
-print(decode(m.generate(context, max_new_tokens=2000)[0].tolist()))
