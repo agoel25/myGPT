@@ -11,6 +11,16 @@ import math
 import inspect
 from dataclasses import dataclass
 
+@dataclass
+class GPTConfig:
+    vocab_size: int = 50304 # GPT-2 vocab size
+    block_size: int = 1024
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
+    dropout: float = 0.0
+    bias: bool = True
+
 class LayerNorm(nn.Module):
     """ LayerNorm with optional bias """
     def __init__(self, dims, bias):
@@ -27,16 +37,78 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0 # ensure embedding dimensionality is divisible by the number of attention heads
+        # regularization
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.residual_dropout = nn.Dropout(config.dropout)
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.dropout = config.dropout
+        # layer initializations
+        self.attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        self.proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        # check if flash attention is available, if not, use bottom triangular matrix
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        if not self.flash:
+            # use lower triangular matrix to ensure that knowledge only flows from the left, tokens after the current token are not included
+            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size)).view(1, 1, config.block_size, config.block_size))
+    
+    def forward(self, input):
+        B, T, C = input.size() # B = batch size, T = context length, C = m_embd (embedding dimentionality)
+        q, k, v  = self.attn(input).split(self.n_embd, dim=2) # calculate query, key and value for all heads
+        # swap n_head (dim = 2) and T (dim = 1) for regularization against other PyTorch methods
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
 
-@dataclass
-class GPTConfig:
-    vocab_size: int = 50304 # GPT-2 vocab size
-    block_size: int = 1024
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    dropout: float = 0.0
-    bias: bool = True
+        # Self-attention: (B, n_head, T, head_size) x (B, n_head, head_size, T) -> (B, n_head, T, T)
+        if self.flash:
+            # faster attention using Flash Attention CUDA kernels, note: no dropout during val
+            output = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+        else:
+            # slower manual implementation of attention
+            w = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            w = w.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            w = F.softmax(w, dim=-1)
+            w = self.attn_dropout(w)
+            output = w @ v # back to original shape
+        output = output.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+
+        # output projection
+        output = self.resid_dropout(self.c_proj(output))
+        return output
+
+class MLP(nn.Module):
+    """ main multi layer perceptron block """
+    def __init__(self, config):
+        super().__init__()
+        self.full_conn = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias) # fully connected linear layeer
+        self.gelu = nn.GELU() # gaussian error linear unit activation function
+        self.proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias) # projection back to original size
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x):
+        x = self.full_conn(x)
+        x = self.gelu(x)
+        x = self.proj(x)
+        x = self.dropout(x)
+        return x
+
+class Block(nn.Module):
+    """ transformer block: as defined in the 'attention is all you need' paper """
+    def __init__(self, config):
+        super().__init__()
+        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.attn = CausalSelfAttention(config)
+        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.mlp = MLP(config)
+
+    def forward(self, x):
+        # attention handles the communication between tokens, feed forward handles the computation
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+
+
 
 # hyperparameters
 batch_size = 16     # independent data sequences that will be processed in parallel
@@ -51,7 +123,7 @@ dropout_rate = 0.2       # dropout rate
 learning_rate = 3e-4
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-torch.manual_seed(1337) # seed = encode('gpt') ;)
+torch.manual_seed(455458) # seed = encode('gpt') ;)
 
 # input text data
 # wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
@@ -121,37 +193,6 @@ class Head(nn.Module):
         v = self.value(x) # (B,T,C)
         out = w @ v # (B, T, T) @ (B, T, C) -> (B, T, C)
         return out
-
-class MLP(nn.Module):
-    """ main multi layer perceptron block """
-    def __init__(self, config):
-        super().__init__()
-        self.full_conn = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias) # fully connected linear layeer
-        self.gelu = nn.GELU() # gaussian error linear unit activation function
-        self.proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias) # projection back to original size
-        self.dropout = nn.Dropout(config.dropout)
-
-    def forward(self, x):
-        x = self.full_conn(x)
-        x = self.gelu(x)
-        x = self.proj(x)
-        x = self.dropout(x)
-        return x
-
-class Block(nn.Module):
-    """ transformer block: as defined in the 'attention is all you need' paper """
-    def __init__(self, config):
-        super().__init__()
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = CausalSelfAttention(config)
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        self.mlp = MLP(config)
-
-    def forward(self, x):
-        # attention handles the communication between tokens, feed forward handles the computation
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
-        return x
 
 class BigramLanguageModel(nn.Module):
     """ language model definition """
