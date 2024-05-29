@@ -111,7 +111,7 @@ class Block(nn.Module):
         return x
 
 class GPT(nn.Module):
-    """ generative pre-trained transformer language model """
+    """ Generative pre-trained transformer language model """
     def __init__(self, config):
         super.__init__()
         assert config.vocab_size is not None
@@ -200,25 +200,7 @@ class GPT(nn.Module):
             index = torch.cat((index, next_index), dim=1) # (B, T+1)
         return index
 
-class BigramLanguageModel(nn.Module):        
-    def generate(self, index, max_new_tokens):
-        # index.shape = (B, T)
-        for _ in range(max_new_tokens):
-            # crop index to last block
-            index_cropped = index[:, -block_size:]
-            # get predictions
-            logits, loss = self(index_cropped)
-            # reduce to the last time dimension
-            logits = logits[:, -1, :] # (B, C)
-            # get probabilities by applying softmax
-            probs = F.softmax(logits, dim=1) # (B, C)
-            # sample from the probability distribution
-            next_index = torch.multinomial(probs, num_samples=1) # (B, 1)
-            # append sampled index to the running sequence
-            index = torch.cat((index, next_index), dim=1) # (B, T+1)
-        return index
-
-model = BigramLanguageModel()
+model = GPT()
 m = model.to(device)
 # print the number of parameters in the model
 print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
