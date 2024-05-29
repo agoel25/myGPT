@@ -159,6 +159,28 @@ class GPT(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def forward(self, index, targets=None):
+        device = index.device
+        B, T = index.size()
+        assert T <= self.config.block_size, f"Sequence length must be smaller than block size but {T} > {self.config.block_size}"
+        pos = torch.arange(0, T, dtype=torch.long, device=device) # position index
+
+        token_embds = self.transformer.wte(index) # (B, T, C), C = n_embd
+        positional_embds = self.transformer.wpe(pos) # (T, C)
+        x = self.transformer.drop(token_embds + positional_embds)
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+
+        if targets is not None:
+            logits = self.lm_head(x)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        else:
+            logits = self.lm_head(x[:, [-1], :])
+            loss = None
+        
+        return logits, loss
         
 
 # hyperparameters
