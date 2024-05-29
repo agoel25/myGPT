@@ -23,7 +23,7 @@ class GPTConfig:
     bias: bool = True
 
 class LayerNorm(nn.Module):
-    """ LayerNorm with optional bias """
+    """ Layer normalization with optional bias """
     def __init__(self, dims, bias):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(dims))
@@ -117,13 +117,49 @@ class GPT(nn.Module):
         assert config.block_size is not None
         self.config = config
 
+        # transformer containing main components that make up GPT
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd),
-            drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            wte = nn.Embedding(config.vocab_size, config.n_embd), # word token embeddings
+            wpe = nn.Embedding(config.block_size, config.n_embd), # positional embeddings
+            drop = nn.Dropout(config.dropout), 
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]), # list of transformer blocks
+            ln_f = LayerNorm(config.n_embd, bias=config.bias), # final layer norm 
         ))
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # maps transformer output back onto vocab_size to predict final output
+        self.transformer.wte.weight = self.lm_head.weight # tying input and output weights for better performance
+
+        # initalize all weights
+        self.apply(self.init_weights)
+        # residual projections are specially initialized as per OpenAI's GPT-2 paper
+        for p_name, p in self.named_parameters():
+            if p_name.endswith('proj.weight'):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+
+        # print number of parameters
+        print("Number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+    
+    def get_num_params(self):
+        """
+        Helper function to return the number of parameters in the model
+        Number of embedding weights gets deleted since we only want count for the model
+        """
+        n_params = sum(p.numel() for p in self.parameters()) - self.transformer.wpe.weight.numel()
+        return n_params
+
+    def init_weights(self, module):
+        """
+        Helper function to initialize all model weights
+        Values:
+        1. Gaussian distribution with a mean of 0 and standard deviation of 0.02
+        2. If bias exists, all bias weights are 0
+        """
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        
 
 # hyperparameters
 batch_size = 16     # independent data sequences that will be processed in parallel
