@@ -2,6 +2,7 @@
 GPT model definition
 All parameter values are adopted from the config
 Every class has 2 simple functions: constructor which initializes the layer/block and forward() which handles the forward pass
+
 For reference here is OpenAI's official GPT-2 TensorFlow implementation: https://github.com/openai/gpt-2/blob/master/src/model.py
 """
 
@@ -55,7 +56,7 @@ class CausalSelfAttention(nn.Module):
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size)).view(1, 1, config.block_size, config.block_size))
     
     def forward(self, input):
-        B, T, C = input.size() # B = batch size, T = context length, C = m_embd (embedding dimentionality)
+        B, T, C = input.size() # B = batch size, T = context length, C = m_embd (embedding dimensionality)
         q, k, v  = self.attn(input).split(self.n_embd, dim=2) # calculate query, key and value for all heads
         # swap n_head (dim = 2) and T (dim = 1) for regularization against other PyTorch methods
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
@@ -132,8 +133,8 @@ class GPT(nn.Module):
         # initalize all weights
         self.apply(self.init_weights)
         # residual projections are specially initialized as per OpenAI's GPT-2 paper
-        for p_name, p in self.named_parameters():
-            if p_name.endswith('proj.weight'):
+        for pn, p in self.named_parameters():
+            if pn.endswith('proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
         # print number of parameters
@@ -184,7 +185,11 @@ class GPT(nn.Module):
         return logits, loss
     
     def crop_block_size(self, block_size):
-        """ Crop the block size if necessary """
+        """
+        Crop the block size if necessary
+        Args:
+            block_size: desired block size after cropping
+        """
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
         self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
@@ -195,6 +200,12 @@ class GPT(nn.Module):
     
     @classmethod
     def from_pretrained(cls, model_type, override_args=None):
+        """
+        Loads a our model parameters from a pre-trained model
+        Args:
+            model_type: type of pre-trained model to load (as of now only 'gpt2' is an option)
+            override_args: arguments to override in the model configuration
+        """
         assert model_type in {'gpt2'} # add other models to the dictionary if required
         override_args = override_args or {}
         assert all(a == 'dropout' for a in override_args)
@@ -242,11 +253,48 @@ class GPT(nn.Module):
 
         return model # model with same parameters as pretrained openai checkpoints
 
-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
-        """ wip """
+    def configure_optimizers(self, weight_decay, lr, betas, device_type):
+        """
+        Set up the optimizer to train the model 
+        Args:
+            weight_decay: weight decay to be applied to the parameters
+            lr: learning rate for the optimizer
+            betas: beta coefficient used for computing running averages of the gradient in Adam
+            device_type: type of device being used, cpu or gpu
+        """
+        # start with all of the candidate parameters
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        # filter out those that do not require gradients
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        # any parameters that are 2+ dimensional will be weight decayed, others won't
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
+        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        optim_groups = [
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
+        ]
+        # Create AdamW optimizer and use the fused version if cuda is available for better performance
+        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_available and device_type == 'cuda'
+        extra_args = dict(fused=True) if use_fused else dict()
+        optimizer = torch.optim.AdamW(optim_groups, lr=lr, betas=betas, **extra_args)
+        print(f"using fused AdamW: {use_fused}")
+
+        return optimizer
 
     def generate(self, index, max_new_tokens, temperature=1.0, top_k=None):
-        """ Generate function which takes in a sequence of indeces and predicts the next token in the sequence, max_new_tokens times """
+        """ 
+        Generate function which takes in a sequence of indeces and predicts the next token in the sequence, max_new_tokens times 
+        Args:
+            index: input tensor of shape (B, T) containing the initial token indices
+            max_new_tokens: maximum number of new tokens to generate
+            temperature: scaling factor for logits to control randomness (default is 1.0).
+            top_k: if specified, restricts sampling to the top k logits.
+        """
         # index.shape = (B, T)
         for _ in range(max_new_tokens):
             # crop index to last block
