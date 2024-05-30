@@ -1,34 +1,38 @@
 # Training script for the model
-# Can run both on a single GPU and in a distributed data parallel (ddp) environment
+# Can run on a CPU, a GPU or (hopefully) in a distributed data parallel (ddp) environment
+# 
+# NOTE: The text is assumed to be pre-tokenized
+
+import os
+import time
+import math
 
 import numpy as np
 import torch
+import wandb
 
-model = GPT()
-m = model.to(device)
-# print the number of parameters in the model
-print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
+from model import GPTConfig, GPT
 
-# create a PyTorch optimizer
-optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+# default config values to train gpt2 on OpenWebText, change values for other dataset if required
+out_dir = 'out'
+eval_interval = 2000
+log_interval = 1
+eval_iters = 200
+eval_only = False # if True, script exits right after the first eval
 
-for i in range(max_iters):
-    # every once in eval_interval iterations, calculate the average loss accross all batches on train and validation sets
-    if i % eval_interval == 0 or iter == max_iters - 1:
-        losses = estimate_loss()
-        print(f"iter {i}: train loss {losses['train']:.4f}, validation loss {losses['validation']:.4f}")
+ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-    # sample a batch of data
-    xb, yb = get_batch('train')
-
-    # evaluate the loss
-    logits, loss = model(xb, yb)
-    optimizer.zero_grad(set_to_none=True)
-    # backward pass
-    loss.backward()
-    # optimizer update
-    optimizer.step()
-
-# generate from the model
-context = torch.zeros((1, 1), dtype=torch.long, device=device)
-print(decode(m.generate(context, max_new_tokens=2000)[0].tolist()))
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            with ctx:
+                logits, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
