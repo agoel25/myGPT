@@ -183,8 +183,70 @@ class GPT(nn.Module):
         
         return logits, loss
     
+    def crop_block_size(self, block_size):
+        """ Crop the block size if necessary """
+        assert block_size <= self.config.block_size
+        self.config.block_size = block_size
+        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
+        for block in self.transformer.h:
+            if hasattr(block.attn, 'bias'):
+                # last 2 dimensions represent length
+                block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
+    
+    @classmethod
+    def from_pretrained(cls, model_type, override_args=None):
+        assert model_type in {'gpt2'} # add other models to the dictionary if required
+        override_args = override_args or {}
+        assert all(a == 'dropout' for a in override_args)
+        from transformers import GPT2LMHeadModel
+        print("Loading weights from pretrained model: %s" % model_type)
+
+        config_args = {
+            'gpt2': dict(n_layer=12, n_head=12, n_embd=768),
+        }[model_type]
+        # update static arguments with values same as openai's gpt2
+        config_args['vocab_size'] = 50257
+        config_args['block_size'] = 1024
+        config_args['bias'] = True
+        if 'dropout' in override_args:
+            config_args['dropout'] = override_args['dropout']
+        
+        # create a new GPT model
+        config = GPTConfig(**config_args)
+        model = GPT(config)
+        # get the state dictionary, which includes both trainable params and buffers
+        state_dict = model.state_dict()
+        state_dict_keys = state_dict.keys()
+        state_dict_keys = [k for k in state_dict_keys if not k.endswith('.attn.bias')] # ignore the mask and buffer
+
+        # initialize a new model using (huggingface's) transformer
+        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
+        state_dict_hf = model_hf.state_dict()
+        state_dict_keys_hf = state_dict_hf.keys()
+        state_dict_keys_hf = [k for k in state_dict_keys_hf if not k.endswith('.attn.masked_bias')] # ignore the buffer
+        state_dict_keys_hf = [k for k in state_dict_keys_hf if not k.endswith('.attn.bias')] # ignore the mask
+        # openai uses conv layer instead of our linear layer, so we need to transpose the weights
+        transposed = ['attn.attn.weight', 'attn.proj.weight', 'mlp.full_conn.weight', 'mlp.proj.weight']
+        assert len(state_dict_keys_hf) == len(state_dict_keys)
+        for k in state_dict_keys_hf:
+            if any(k.endswith(w) for w in transposed):
+                # transpose parameters in the hf dictionary and then copy over
+                assert state_dict_hf[k].shape[::-1] == state_dict[k].shape
+                with torch.no_grad():
+                    state_dict[k].copy_(state_dict_hf[k].t())
+            else:
+                # normal copy over
+                assert state_dict_hf[k].shape == state_dict[k].shape
+                with torch.no_grad():
+                    state_dict[k].copy_(state_dict_hf[k])
+
+        return model # model with same parameters as pretrained openai checkpoints
+
+    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+        """ wip """
+
     def generate(self, index, max_new_tokens, temperature=1.0, top_k=None):
-        """ Generate function which takes in a sequence of indeces and predicts the next token in the sequence max_new_tokens times """
+        """ Generate function which takes in a sequence of indeces and predicts the next token in the sequence, max_new_tokens times """
         # index.shape = (B, T)
         for _ in range(max_new_tokens):
             # crop index to last block
