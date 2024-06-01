@@ -10,6 +10,7 @@ import pickle
 import numpy as np
 import torch
 from torch.distributed import init_process_group, destroy_process_group
+from torch.nn.parallel import DistributedDataParallel
 
 from model import GPTConfig, GPT
 
@@ -36,9 +37,18 @@ n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 
+# optimizer related
+learning_rate = 6e-4 # initial learning rate
+max_iters = 600000 # total number of iterations
+weight_decay = 1e-1
+beta1 = 0.9
+beta2 = 0.95
+grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
+
 # pytorch related
 device = 'cuda' # 'cpu', 'cuda' or (for macbooks) 'mps'
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'
+compile = True
 backend = 'nccl' # distributed data parallel settings, example: nccl, gloo
 # ----------------------------------------------------------------------------------------------------------------------------------- #
 
@@ -77,7 +87,7 @@ torch.backends.cudnn.allow_tf32 = True
 device_type = 'cuda' if 'cuda' in device else 'cpu'
 # setting up a context for automating mixed precision for better performance and memory management when using GPUs
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype] # map data types to their corresponding pytorch data types
-ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+context = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
 # load the data, that is inputs (xs) and targets (ys)
 data_dir = os.path.join('data', dataset)
@@ -132,8 +142,8 @@ elif init_from == 'resume':
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = checkpoint_model_args[k]
     # create the model
-    gptconfif = GPTConfig(**model_args)
-    model = GPT(gptconfif)
+    gptconfig = GPTConfig(**model_args)
+    model = GPT(gptconfig)
     state_dict = checkpoint['model']
     # checkpoints state dictionaries sometimes get an unwated prefix, we have to remove it for model.py to work as expected
     unwanted_prefix = '_orig_mod.'
@@ -153,15 +163,42 @@ elif init_from.startswith('gpt2'):
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = getattr(model.config, k)
 
+# crop down the model block size if required
+if block_size < model.config.block_size:
+    model.crop_block_size(block_size)
+    model_args['block_size'] = block_size
+model.to(device)
+
+# initializing GradScaler to scale gradients for mixed (half + single) pricision training; uses both 16-bit and 32-bit floating points 
+# to reduce memory usage and accelerate training since small gradients underflow and fall to 0 during back propagation
+scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+
+# initialize the optimizer (AdamW)
+optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+if init_from == 'resume':
+    optimizer.load_state_dict(checkpoint['optimizer']) # use state dictionary from checkpoint if resuming training
+checkpoint = None
+
+# compile the model (if available)
+if compile:
+    print("Compiling the model... (hang tight, takes round a minute)")
+    unoptimized_model = model
+    model = torch.compile(model)
+
+# create a DistributedDataParallel object (if available)
+if ddp:
+    model = DistributedDataParallel(model, device_ids=[ddp_local_rank])
+
+# estimate loss using many batches since individual batches can have very luck or very unlucky data
 @torch.no_grad()
 def estimate_loss():
     out = {}
-    model.eval()
+    model.eval() # put model in evaluation mode
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
             X, Y = get_batch(split)
-            with ctx:
+            with context:
                 logits, loss = model(X, Y)
             losses[k] = loss.item()
         out[split] = losses.mean()
