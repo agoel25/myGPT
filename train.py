@@ -23,8 +23,9 @@ out_dir = 'out'
 eval_interval = 2000
 eval_iters = 200
 log_interval = 1
-eval_only = False # if true, exit after the first iteration itself
+eval_only = False # exit after the first iteration itself
 init_from = 'start' # start, resume or gpt2 (for pretrained checkpoints)
+always_save_checkpoint = True # always save a checkpoint after each evaluation
 
 # data related
 dataset = 'openwebtext' # name of data directory in ./data folder to be used for training
@@ -253,4 +254,44 @@ while True:
     lr = get_lr(iter_num) if decay_lr else lr
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
-    
+    # run if it has been eval_interval iterations since the last evaluation 
+    if iter_num % eval_interval == 0 and master_process:
+        losses = estimate_loss()
+        print(f"Iteration {iter_num}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}")
+        # logging
+        if wandb_log: 
+            wandb.log({
+                "iter": iter_num,
+                "train/loss": losses['train'],
+                "val/loss": losses['val'],
+                "lr": lr,
+            })
+    # run if the current validation loss is the best so far or if a checkpoint needs to be saved
+    if losses['val'] < best_val_loss or always_save_checkpoint:
+            best_val_loss = losses['val']
+            if iter_num > 0: # if the model just started, do not save checkpoint
+                # create checkpoint dictionary and save it to out_dir
+                checkpoint = {
+                    'model': raw_model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'model_args': model_args,
+                    'iter_num': iter_num,
+                    'best_val_loss': best_val_loss,
+                    'config': config,
+                }
+                print(f"Saving checkpoint to {out_dir}")
+                torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+    # early-exit for evaluation only mode 
+    if iter_num == 0 and eval_only:
+        break
+
+    ###################################################################
+    # wip
+    ###################################################################
+
+    # termination
+    if iter_num > max_iters:
+        break
+
+if ddp:
+    destroy_process_group()
