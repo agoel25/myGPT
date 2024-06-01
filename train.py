@@ -23,6 +23,7 @@ log_interval = 1
 eval_only = False # if true, exit after the first iteration itself
 init_from = 'start' # start, resume or gpt2 (for pretrained checkpoints)
 
+dataset = 'openwebtext' # name of data directory in ./data folder to be used for training
 gradient_accumulation_steps = 5 * 8 # we want to accumulate gradients accross mini batches before the backward pass
 batch_size = 12
 block_size = 1024
@@ -63,7 +64,27 @@ torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 device_type = 'cuda' if 'cuda' in device else 'cpu'
+# setting up a context for automating mixed precision for better performance and memory management when using GPUs
+ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype] # map data types to their corresponding pytorch data types
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+
+# load the data, that is inputs (xs) and targets (ys)
+data_dir = os.path.join('data', dataset)
+def get_batch(split):
+    # using same memory mapped arrays as model.py for better performance
+    if split == 'train':
+        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+    else:
+        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+    index = torch.randint(len(data) - block_size, (batch_size,))
+    # get input and target tensors for the randomly selected indeces from accross the data
+    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in index])
+    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in index])
+    if device_type == 'cuda':
+        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+    else:
+        x, y = x.to(device), y.to(device)
+    return x, y
 
 @torch.no_grad()
 def estimate_loss():
