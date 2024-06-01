@@ -47,7 +47,7 @@ compile = True
 backend = 'nccl' # distributed data parallel settings, example: nccl, gloo
 
 # optimizer related
-lr = 6e-4 # initial learning rate
+learning_rate = 6e-4 # initial learning rate
 max_iters = 600000 # total number of iterations
 weight_decay = 1e-1
 beta1 = 0.9
@@ -58,7 +58,7 @@ grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 decay_lr = True # decay the learning rate as iterations progress
 warmup_iters = 2000 # number of iterations to warmup for
 lr_decay_iters = 600000 # = max_iters
-min_lr = 6e-5 # minimum learning rate = lr/10
+min_lr = 6e-5 # minimum learning rate = learning_rate/10
 
 # weight and bias logging related
 wandb_log = False
@@ -193,7 +193,7 @@ model.to(device)
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
 # initialize the optimizer (AdamW)
-optimizer = model.configure_optimizers(weight_decay, lr, (beta1, beta2), device_type)
+optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer']) # use state dictionary from checkpoint if resuming training
 checkpoint = None
@@ -226,17 +226,17 @@ def estimate_loss():
 
 # learning rate setup
 def get_lr(iter):
-    # if iter < warmup_iters, learning rate increases linearly from 0 to lr (this is a linear warmup)
+    # if iter < warmup_iters, learning rate increases linearly from 0 to learning_rate (this is a linear warmup)
     if iter < warmup_iters:
-        return lr * iter / warmup_iters
+        return learning_rate * iter / warmup_iters
     # if iter > lr_decay_iters, learning rate has a constant value = min_lr
     if iter > lr_decay_iters:
         return min_lr
-    # between warmup_iters and lr_decay_iters, use cosine smoothly decay to go down from lr to min_lr
+    # between warmup_iters and lr_decay_iters, use cosine smoothly decay to go down from learning_rate to min_lr
     decay_ratio = (iter - warmup_iters) / (lr_decay_iters - warmup_iters) # calculate progress between warmup_iters and lr_decay_iters
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # use cosine function to calculate learning rage coefficient (0 <= coeff <= 1)
-    return min_lr + coeff * (lr - min_lr) # return final learning rate
+    return min_lr + coeff * (learning_rate - min_lr) # return final learning rate
 
 # weights and biases logging
 if wandb_log and master_process: # only master process handles the logging
@@ -251,7 +251,7 @@ local_iter_num = 0 # total number of iterations for the local process
 raw_model = model.module if ddp else model
 while True:
     # fetch and set learning rate
-    lr = get_lr(iter_num) if decay_lr else lr
+    lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
     # run if it has been eval_interval iterations since the last evaluation 
@@ -284,10 +284,6 @@ while True:
     # early-exit for evaluation only mode 
     if iter_num == 0 and eval_only:
         break
-
-    ###################################################################
-    # wip
-    ###################################################################
 
     # termination
     if iter_num > max_iters:
