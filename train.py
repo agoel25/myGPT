@@ -1,7 +1,7 @@
 # Training script for the model
 # Can run on a CPU, a GPU or (hopefully) in a distributed data parallel (ddp) environment
 # 
-# NOTE: The text is assumed to be pre-tokenized
+# NOTE: The input text is assumed to be pre-tokenized
 
 import os
 from contextlib import nullcontext
@@ -247,7 +247,6 @@ if wandb_log and master_process: # only master process handles the logging
 # training loop
 X, Y = get_batch('train') # first batch
 t0 = time.time() # for logging
-local_iter_num = 0 # total number of iterations for the local process
 raw_model = model.module if ddp else model
 while True:
     # fetch and set learning rate
@@ -284,6 +283,40 @@ while True:
     # early-exit for evaluation only mode 
     if iter_num == 0 and eval_only:
         break
+    
+    # starting gradient accumulation loop
+    # gradients accumulate over multiple mini batches to simulate larger batch size
+    for micro_step in range(gradient_accumulation_steps):
+        if ddp:
+            # in ddp we only need to synchronize the gradients at the last step
+            model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+        # forward pass and scaling the loss down to account for the gradient accumulation
+        with context: # using context just ensures that the mized prevision operations are used if needed
+            logits, loss = model(X, Y)
+            loss = loss / gradient_accumulation_steps
+        X, Y = get_batch('train')
+        # backward pass with loss scaling
+        scaler.scale(loss).backward()
+    # clip the gradient to prevent them from being too large -> stabilizes training
+    if grad_clip != 0.0:
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    # step the optimizer and scaler for next training iteration
+    scaler.step(optimizer)
+    scaler.update()
+    # zeroes out the gradients
+    optimizer.zero_grad(set_to_none=True)
+
+    # logging with timing
+    t1 = time.time()
+    dt = t1 - t0
+    t0 = t1
+    if iter_num % log_interval == 0 and master_process:
+        # get loss as float. note: this is a CPU-GPU sync point
+        # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
+        lossf = loss.item() * gradient_accumulation_steps
+        print(f"Iter {iter_num}: Loss {lossf:.4f}, Time {dt*1000:.2f}ms")
+    iter_num += 1
 
     # termination
     if iter_num > max_iters:
