@@ -29,7 +29,7 @@ always_save_checkpoint = True # always save a checkpoint after each evaluation
 
 # data related
 dataset = 'openwebtext' # name of data directory in ./data folder to be used for training
-gradient_accumulation_steps = 5 * 8 # we want to accumulate gradients accross mini batches before the backward pass
+gradient_accumulation_steps = 5 * 8 # we want to accumulate gradients across mini batches before the backward pass
 batch_size = 12
 block_size = 1024
 
@@ -72,7 +72,7 @@ exec(open('configurator.py').read())
 config = {k: globals()[k] for k in config_keys}
 
 # environment and i/o setup
-# NOTE: ddp is a method in PyTorch for parallelizing model training accress multiple GPUs and nodes, each setup has a rank
+# NOTE: ddp is a method in PyTorch for parallelizing model training across multiple GPUs and nodes, each setup has a rank
 ddp = int(os.environ.get('RANK', -1)) != -1 # get the RANK env variable to see if this is a ddp environment 
 if ddp:
     init_process_group(backend=backend)
@@ -117,7 +117,7 @@ def get_batch(split):
     else:
         data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
     index = torch.randint(len(data) - block_size, (batch_size,))
-    # get input and target tensors for the randomly selected indeces from accross the data
+    # get input and target tensors for the randomly selected indices from across the data
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in index])
     y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in index])
     if device_type == 'cuda':
@@ -164,7 +164,7 @@ elif init_from == 'resume':
     gptconfig = GPTConfig(**model_args)
     model = GPT(gptconfig)
     state_dict = checkpoint['model']
-    # checkpoints state dictionaries sometimes get an unwated prefix, we have to remove it for model.py to work as expected
+    # checkpoints state dictionaries sometimes get an unwanted prefix, we have to remove it for model.py to work as expected
     unwanted_prefix = '_orig_mod.'
     for k,v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
@@ -188,7 +188,7 @@ if block_size < model.config.block_size:
     model_args['block_size'] = block_size
 model.to(device)
 
-# initializing GradScaler to scale gradients for mixed (half + single) pricision training; uses both 16-bit and 32-bit floating points 
+# initializing GradScaler to scale gradients for mixed (half + single) precision training; uses both 16-bit and 32-bit floating points 
 # to reduce memory usage and accelerate training since small gradients underflow and fall to 0 during back propagation
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
@@ -291,7 +291,7 @@ while True:
             # in ddp we only need to synchronize the gradients at the last step
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         # forward pass and scaling the loss down to account for the gradient accumulation
-        with context: # using context just ensures that the mized prevision operations are used if needed
+        with context: # using context just ensures that the mixed prevision operations are used if needed
             logits, loss = model(X, Y)
             loss = loss / gradient_accumulation_steps
         X, Y = get_batch('train')
@@ -311,11 +311,11 @@ while True:
     t1 = time.time()
     dt = t1 - t0
     t0 = t1
+    # master process handles logging, log if current iteration is a multiple of log_interval
     if iter_num % log_interval == 0 and master_process:
-        # get loss as float. note: this is a CPU-GPU sync point
-        # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-        lossf = loss.item() * gradient_accumulation_steps
-        print(f"Iter {iter_num}: Loss {lossf:.4f}, Time {dt*1000:.2f}ms")
+        # scaling up loss to to approximate total loss, since loss was scaled down during gradient accumulation
+        loss_out = loss.item() * gradient_accumulation_steps
+        print(f"Iter {iter_num}: Loss {loss_out:.4f}, Time {dt*1000:.2f}ms")
     iter_num += 1
 
     # termination
