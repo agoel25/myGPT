@@ -16,4 +16,18 @@ for arg in sys.argv[1:]:
             print(file.read())
         exec(open(arg).read())
     else:
-        # split argument in key and value
+        # argument is the name (key) and value of a hyperparameter
+        key, val = arg.split('=')
+        key = key[2:]
+        if key in globals():
+            try:
+                # attempt to evaluate it as boolean, integer, etc.
+                eval_val = literal_eval(val)
+            except (SyntaxError, ValueError):
+                # if evaluation does not work we assume we can use the string
+                eval_val = val
+            assert type(eval_val) == type(globals()[key])
+            print(f"Overriding: {key} = {eval_val}")
+            globals()[key] = eval_val
+        else:
+            raise ValueError(f"Unknown key: {key}")
