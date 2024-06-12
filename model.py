@@ -2,6 +2,7 @@
 GPT model definition
 All parameter values are adopted from the config
 Every class has 2 simple functions: constructor which initializes the layer/block and forward() which handles the forward pass
+All naming conventions follow Hugging Face's transformer implementation: https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 
 For reference here is OpenAI's official GPT-2 TensorFlow implementation: https://github.com/openai/gpt-2/blob/master/src/model.py
 """
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 @dataclass
 class GPTConfig:
     """ Hyperparameters """
-    vocab_size: int = 50304 # GPT-2 vocab size
+    vocab_size: int = 50257 # GPT-2 vocab size
     block_size: int = 1024
     n_layer: int = 12
     n_head: int = 12
@@ -36,19 +37,19 @@ class LayerNorm(nn.Module):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, eps)
 
 class CausalSelfAttention(nn.Module):
-    """ Self attention """
+    """ Multi-headed self attention (similar to my older commits but optimized as suggested by Andrej Kaparthy) """
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0 # ensure embedding dimensionality is divisible by the number of attention heads
+        # layer initializations
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.residual_dropout = nn.Dropout(config.dropout)
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        # layer initializations
-        self.attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
-        self.proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         # check if flash attention is available, if not, use bottom triangular matrix
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
@@ -57,7 +58,7 @@ class CausalSelfAttention(nn.Module):
     
     def forward(self, input):
         B, T, C = input.size() # B = batch size, T = context length, C = m_embd (embedding dimensionality)
-        q, k, v  = self.attn(input).split(self.n_embd, dim=2) # calculate query, key and value for all heads
+        q, k, v  = self.c_attn(input).split(self.n_embd, dim=2) # calculate query, key and value for all heads
         # swap n_head (dim = 2) and T (dim = 1) for regularization against other PyTorch methods
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
@@ -70,29 +71,29 @@ class CausalSelfAttention(nn.Module):
         else:
             # slower manual implementation of attention
             w = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            w = w.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-            w = F.softmax(w, dim=-1)
+            w = w.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf')) # makes sure context for a token is just the tokens before it
+            w = F.softmax(w, dim=-1) # normalizes the attention
             w = self.attn_dropout(w)
             output = w @ v # back to original shape
         output = output.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
-        output = self.residual_dropout(self.proj(output))
+        output = self.residual_dropout(self.c_proj(output))
         return output
 
 class MLP(nn.Module):
     """ Main multi-layer perceptron block """
     def __init__(self, config):
         super().__init__()
-        self.full_conn = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias) # fully connected linear layeer
-        self.gelu = nn.GELU() # gaussian error linear unit activation function
-        self.proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias) # projection back to original size
+        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias) # fully connected linear layeer
+        self.gelu = nn.GELU(approximate='tanh') # gaussian error linear unit activation function
+        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias) # projection back to original size
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        x = self.full_conn(x)
+        x = self.c_fc(x)
         x = self.gelu(x)
-        x = self.proj(x)
+        x = self.c_proj(x)
         x = self.dropout(x)
         return x
 
@@ -121,13 +122,13 @@ class GPT(nn.Module):
 
         # transformer containing main components that make up GPT
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd), # word token embeddings
-            wpe = nn.Embedding(config.block_size, config.n_embd), # positional embeddings
+            wte = nn.Embedding(config.vocab_size, config.n_embd), # weights of token embeddings
+            wpe = nn.Embedding(config.block_size, config.n_embd), # weights of positional embeddings
             drop = nn.Dropout(config.dropout), 
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]), # list of transformer blocks
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]), # list of blocks, one per hidden layer
             ln_f = LayerNorm(config.n_embd, bias=config.bias), # final layer norm 
         ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # maps transformer output back onto vocab_size to predict final output
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # projection from n_embd back to vocab_size to predict final output
         self.transformer.wte.weight = self.lm_head.weight # tying input and output weights for better performance
 
         # initalize all weights
@@ -206,7 +207,7 @@ class GPT(nn.Module):
             model_type: type of pre-trained model to load (as of now only 'gpt2' is an option)
             override_args: arguments to override in the model configuration
         """
-        assert model_type in {'gpt2'} # add other models to the dictionary if required
+        assert model_type in {'gpt2', 'gpt2-xl'} # add other models to the dictionary if required
         override_args = override_args or {}
         assert all(a == 'dropout' for a in override_args)
         from transformers import GPT2LMHeadModel
@@ -238,7 +239,7 @@ class GPT(nn.Module):
         state_dict_keys_hf = [k for k in state_dict_keys_hf if not k.endswith('.attn.bias')] # ignore the mask
         # openai uses conv layer instead of our linear layer, so we need to transpose the weights
         transposed = ['attn.attn.weight', 'attn.proj.weight', 'mlp.full_conn.weight', 'mlp.proj.weight']
-        assert len(state_dict_keys_hf) == len(state_dict_keys)
+        assert len(state_dict_keys_hf) == len(state_dict_keys), f"mismatched keys: {len(state_dict_keys_hf)} != {len(state_dict_keys)}"
         for k in state_dict_keys_hf:
             if any(k.endswith(w) for w in transposed):
                 # transpose parameters in the hf dictionary and then copy over
