@@ -135,7 +135,7 @@ class GPT(nn.Module):
         self.apply(self.init_weights)
         # residual projections are specially initialized as per OpenAI's GPT-2 paper
         for pn, p in self.named_parameters():
-            if pn.endswith('proj.weight'):
+            if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
         # print number of parameters
@@ -235,10 +235,11 @@ class GPT(nn.Module):
         model_hf = GPT2LMHeadModel.from_pretrained(model_type)
         state_dict_hf = model_hf.state_dict()
         state_dict_keys_hf = state_dict_hf.keys()
+        # copy over tensors from huggingface to our model
         state_dict_keys_hf = [k for k in state_dict_keys_hf if not k.endswith('.attn.masked_bias')] # ignore the buffer
         state_dict_keys_hf = [k for k in state_dict_keys_hf if not k.endswith('.attn.bias')] # ignore the mask
         # openai uses conv layer instead of our linear layer, so we need to transpose the weights
-        transposed = ['attn.attn.weight', 'attn.proj.weight', 'mlp.full_conn.weight', 'mlp.proj.weight']
+        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
         assert len(state_dict_keys_hf) == len(state_dict_keys), f"mismatched keys: {len(state_dict_keys_hf)} != {len(state_dict_keys)}"
         for k in state_dict_keys_hf:
             if any(k.endswith(w) for w in transposed):
