@@ -108,6 +108,9 @@ class Block(nn.Module):
 
     def forward(self, x):
         # attention handles the communication between tokens, feed forward handles the computation
+        
+        # since gradients are equally distributed for addition during backprop, same gradients will flow through the 
+        # residual pathway and the the blocks
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
         return x
@@ -121,6 +124,8 @@ class GPT(nn.Module):
         self.config = config
 
         # transformer containing main components that make up GPT
+        # matches the diagram on page 3 of the 'attention is all you need' paper: https://arxiv.org/abs/1706.03762 
+        # (accounting some changes defined in OpenAI's GPT2 paper: https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf)
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd), # weights of token embeddings
             wpe = nn.Embedding(config.block_size, config.n_embd), # weights of positional embeddings
