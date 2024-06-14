@@ -30,7 +30,7 @@ class CausalSelfAttention(nn.Module):
         output = w @ v # back to original shape
         output = output.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
         # output projection
-        output = self.residual_dropout(self.c_proj(output))
+        output = self.c_proj(output)
         return output
 
 class MLP(nn.Module):
@@ -85,8 +85,23 @@ class GPT(nn.Module):
             ln_f = nn.LayerNorm(config.n_embd),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # projection from n_embd back to vocab size for final prediction
+
+        # weight sharing between wte and lm_head
+        self.transformer.wte.weight = self.lm_head.weight
+
+        # initialize parameters
+        self.apply(self._init_weights)
     
-    def forward(self, index):
+    # default initialize update according to gpt2 paper
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    
+    def forward(self, index, targets=None):
         B, T = index.size()
         assert T <= self.config.block_size
         pos = torch.arange(0, T, dtype=torch.long, device=index.device)
@@ -99,7 +114,11 @@ class GPT(nn.Module):
         # forward the final layernorm and classifier
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x) # logits are one softmax away from being probabilities
-        return logits
+        loss = None
+        if targets is not None:
+            # cross entropy only likes 2 dimentional dims so we flatten out our tensors
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
     
     @classmethod
     def from_pretrained(cls, model_type):
@@ -149,5 +168,87 @@ class GPT(nn.Module):
 
         return model # model with same parameters as pretrained openai checkpoints
 
-model = GPT.from_pretrained('gpt2')
-print('works')
+# ----------------------------------------------------------------------------------------------------------------------------------------
+
+import tiktoken
+class DataLoaderLite:
+    def __init__(self, B, T):
+        self.B = B
+        self.T = T
+
+        with open('input.txt', 'r') as f:
+            text = f.read()
+        enc = tiktoken.get_encoding('gpt2')
+        tokens = enc.encode(text)
+        self.tokens = torch.tensor(tokens)
+        print(f"Loaded {len(self.tokens)} tokens")
+
+        self.current_position = 0 
+    
+    def next_batch(self):
+        B, T = self.B, self.T
+        buf = self.tokens[self.current_position: self.current_position+B*T+1]
+        x = buf[:-1].view(B, T)
+        y = buf[1:].view(B, T)
+        self.current_position += B*T
+        # if next batch is out of bounds, reset the position
+        if self.current_position + (B*T+1) > len(self.tokens):
+            self.current_position = 0
+        return x, y
+
+# -----------------------------------------------------------------------------------------
+
+device = 'cpu'
+if torch.cuda.is_available():
+    device = 'cuda'
+elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+    device = 'mps'
+print(f"Using device {device}")
+# device = 'cpu'
+
+train_loader = DataLoaderLite(B=4, T=32)
+# model = GPT.from_pretrained('gpt2')
+model = GPT(GPTConfig)
+model.to(device)
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+for i in range(50):
+    x, y = train_loader.next_batch()
+    x, y = x.to(device), y.to(device)
+    optimizer.zero_grad()
+    logits, loss = model(x, y)
+    loss.backward()
+    optimizer.step()
+    print(f"step {i}, loss {loss.item()}")
+
+import sys
+sys.exit(0)
+
+
+# prefix tokens
+tokens = torch.tensor(tokens, dtype=torch.long)
+tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
+x = tokens.to(device)
+
+num_return_sequences = 5
+max_length = 30
+
+# generate
+torch.manual_seed(42)
+while x.size(1) < max_length:
+    with torch.no_grad():
+        logits = model(x)
+        # only use the logits in the last position
+        logits = logits[:, -1, :]
+        probs = F.softmax(logits, dim=-1)
+        # only keep the top 50 probabilities, remove lower ones to avoid model from getting sidetracked
+        # 50 is the default used by huggingface's pipeline so we use this too
+        topk_probs, topk_indeces = torch.topk(probs, 50, dim=-1)
+        ix = torch.multinomial(topk_probs, 1)
+        xcol = torch.gather(topk_indeces, -1, ix)
+        x = torch.cat((x, xcol), dim=1)
+
+for i in range(num_return_sequences):
+    tokens = x[i, :max_length].tolist()
+    decoded = enc.decode(tokens)
+    print("> " + decoded)
