@@ -29,7 +29,7 @@ always_save_checkpoint = True # always save a checkpoint after each evaluation
 
 # data related
 dataset = 'openwebtext' # name of data directory in ./data folder to be used for training
-gradient_accumulation_steps = 5 * 8 # we want to accumulate gradients across mini batches before the backward pass
+gradient_accumulation_steps = 5 * 8 # we want to accumulate gradients across mini batches to simulate larger batch size
 batch_size = 12
 block_size = 1024
 
@@ -41,7 +41,12 @@ dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 
 # pytorch related
-device = 'cuda' # 'cpu', 'cuda' or (for macbooks) 'mps'
+device = 'cpu'
+if torch.cuda.is_available():
+    device = 'cuda'
+elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+    device = 'mps' # for macbooks
+print(f"Using device {device}")
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'
 compile = True
 backend = 'nccl' # distributed data parallel settings, example: nccl, gloo
@@ -56,9 +61,9 @@ grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 
 # learning rate related
 decay_lr = True # decay the learning rate as iterations progress
-warmup_iters = 2000 # number of iterations to warmup for
-lr_decay_iters = 600000 # = max_iters
-min_lr = 6e-5 # minimum learning rate = learning_rate/10
+warmup_iters = 2000
+lr_decay_iters = 600000
+min_lr = learning_rate * 0.1
 
 # weight and bias logging related
 wandb_log = False
@@ -72,7 +77,8 @@ exec(open('configurator.py').read())
 config = {k: globals()[k] for k in config_keys}
 
 # environment and i/o setup
-# NOTE: ddp is a method in PyTorch for parallelizing model training across multiple GPUs and nodes, each setup has a rank
+# DDP (Distributed Data Parallel) is a method in PyTorch for parallelizing model training across multiple GPUs
+# torchrun command sets environment variables RANK, LOCAL_RANK and WORLD_SIZE
 ddp = int(os.environ.get('RANK', -1)) != -1 # get the RANK env variable to see if this is a ddp environment 
 if ddp:
     init_process_group(backend=backend)
@@ -189,7 +195,7 @@ if block_size < model.config.block_size:
 model.to(device)
 
 # initializing GradScaler to scale gradients for mixed (half + single) precision training; uses both 16-bit and 32-bit floating points 
-# to reduce memory usage and accelerate training since small gradients underflow and fall to 0 during back propagation
+# to reduce memory usage and accelerate training since small gradients underflow and fall to 0 during back prop
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
 # initialize the optimizer (AdamW)
@@ -225,7 +231,7 @@ def estimate_loss():
     model.train() # put model back in train mode
     return out
 
-# learning rate setup
+# learning rate scheduler
 def get_lr(iter):
     # if iter < warmup_iters, learning rate increases linearly from 0 to learning_rate (this is a linear warmup)
     if iter < warmup_iters:
@@ -289,10 +295,10 @@ while True:
     # gradients accumulate over multiple mini batches to simulate larger batch size
     for micro_step in range(gradient_accumulation_steps):
         if ddp:
-            # in ddp we only need to synchronize the gradients at the last step
+            # in ddp we synchronize the gradients at the last step
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         # forward pass and scaling the loss down to account for the gradient accumulation
-        with context: # using context just ensures that the mixed prevision operations are used if needed
+        with context: # use mixed prevision operations if needed
             logits, loss = model(X, Y)
             loss = loss / gradient_accumulation_steps
         X, Y = get_batch('train')
@@ -305,7 +311,7 @@ while True:
     # step the optimizer and scaler for next training iteration
     scaler.step(optimizer)
     scaler.update()
-    # zeroes out the gradients
+    # zero out the gradients
     optimizer.zero_grad(set_to_none=True)
 
     # logging with timing
