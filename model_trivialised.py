@@ -205,7 +205,10 @@ if torch.cuda.is_available():
 elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
     device = 'mps'
 print(f"Using device {device}")
-# device = 'cpu'
+
+torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(42)
 
 train_loader = DataLoaderLite(B=4, T=32)
 
@@ -213,24 +216,25 @@ train_loader = DataLoaderLite(B=4, T=32)
 torch.set_float32_matmul_precision('high')
 
 # model = GPT.from_pretrained('gpt2')
-model = GPT(GPTConfig)
+model = GPT(GPTConfig(vocab_size=50304)) # overriding vocab size to be the nearest number divisible by 2
 model.to(device)
-model = torch.compile(model) # compiles the NN, we pay in compilation time for better runtime
+if torch.cuda.is_available():
+    model = torch.compile(model) # compiles the NN, we pay in compilation time for better runtime
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
-for i in range(100):
+for i in range(50):
     t0 = time.time()
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    if device == 'cuda':
+    if torch.cuda.is_available():
         with torch.autocast(device_type=device, dtype=torch.bfloat16): # using automatic mixed precision for better performance on gpus
             logits, loss = model(x, y)
     else:
         logits, loss = model(x, y)
     loss.backward()
     optimizer.step()
-    if device == 'cuda': 
+    if torch.cuda.is_available():
         torch.cuda.synchronize() # ensures that gpu has finished processing before continuing
     t1 = time.time()
     dt = (t1 - t0) * 1000
@@ -249,7 +253,6 @@ num_return_sequences = 5
 max_length = 30
 
 # generate
-torch.manual_seed(42)
 while x.size(1) < max_length:
     with torch.no_grad():
         logits = model(x)
