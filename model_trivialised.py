@@ -197,6 +197,7 @@ class DataLoaderLite:
         return x, y
 
 # -----------------------------------------------------------------------------------------
+import time
 
 device = 'cpu'
 if torch.cuda.is_available():
@@ -207,19 +208,33 @@ print(f"Using device {device}")
 # device = 'cpu'
 
 train_loader = DataLoaderLite(B=4, T=32)
+
+# use the tf32 precision 
+torch.set_float32_matmul_precision('high')
+
 # model = GPT.from_pretrained('gpt2')
 model = GPT(GPTConfig)
 model.to(device)
+model = torch.compile(model) # compiles the NN, we pay in compilation time for better runtime
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
-for i in range(50):
+for i in range(100):
+    t0 = time.time()
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    logits, loss = model(x, y)
+    if device == 'cuda':
+        with torch.autocast(device_type=device, dtype=torch.bfloat16): # using automatic mixed precision for better performance on gpus
+            logits, loss = model(x, y)
+    else:
+        logits, loss = model(x, y)
     loss.backward()
     optimizer.step()
-    print(f"step {i}, loss {loss.item()}")
+    if device == 'cuda': 
+        torch.cuda.synchronize() # ensures that gpu has finished processing before continuing
+    t1 = time.time()
+    dt = (t1 - t0) * 1000
+    print(f"step {i}, loss {loss.item()}, time {dt:.2f}ms")
 
 import sys
 sys.exit(0)
