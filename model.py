@@ -17,7 +17,7 @@ from dataclasses import dataclass
 @dataclass
 class GPTConfig:
     """ Hyperparameters """
-    vocab_size: int = 50257 # GPT-2 vocab size
+    vocab_size: int = 50304
     block_size: int = 1024
     n_layer: int = 12
     n_head: int = 12
