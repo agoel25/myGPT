@@ -1,4 +1,3 @@
-
 import tiktoken
 import math
 import time
@@ -57,7 +56,7 @@ model.to(device)
 if torch.cuda.is_available():
     model = torch.compile(model) # compiles the NN, we pay in compilation time for better runtime
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95))
 for i in range(50):
     t0 = time.time()
     x, y = train_loader.next_batch()
@@ -69,12 +68,13 @@ for i in range(50):
     else:
         logits, loss = model(x, y)
     loss.backward()
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0) # set maximum gradient to 1.0
     optimizer.step()
     if torch.cuda.is_available():
         torch.cuda.synchronize() # ensures that gpu has finished processing before continuing
     t1 = time.time()
     dt = (t1 - t0) * 1000
-    print(f"step {i}, loss {loss.item()}, time {dt:.2f}ms")
+    print(f"step {i}, loss {loss.item():.6f}, norm: {norm:.4f}, time {dt:.2f}ms")
 
 import sys
 sys.exit(0)
