@@ -51,6 +51,7 @@ class CausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
         # check if flash attention is available, if not, use bottom triangular matrix
+        # flash attention is another kernel fusion operation, reducing time spent sending data between memory and processing units
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
             # use lower triangular matrix to ensure that knowledge only flows from the left, tokens after the current token are not included

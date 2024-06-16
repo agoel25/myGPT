@@ -202,6 +202,7 @@ checkpoint = None
 if compile:
     print("Compiling the model... (hang tight, takes round a minute)")
     unoptimized_model = model
+    # compile is a kernel fusion operation, reducing time spent sending data between memory and processing units
     model = torch.compile(model)
 
 # create a DistributedDataParallel object (if available)
