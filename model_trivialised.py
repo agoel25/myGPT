@@ -216,7 +216,7 @@ train_loader = DataLoaderLite(B=4, T=32)
 torch.set_float32_matmul_precision('high')
 
 # model = GPT.from_pretrained('gpt2')
-model = GPT(GPTConfig(vocab_size=50304)) # overriding vocab size to be the nearest number divisible by 2
+model = GPT(GPTConfig(vocab_size=50304)) # overriding vocab size to the nearest number divisible by 2
 model.to(device)
 if torch.cuda.is_available():
     model = torch.compile(model) # compiles the NN, we pay in compilation time for better runtime
