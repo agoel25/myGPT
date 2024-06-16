@@ -233,10 +233,10 @@ def get_lr(iter):
     # if iter > lr_decay_iters, learning rate has a constant value = min_lr
     if iter > lr_decay_iters:
         return min_lr
-    # between warmup_iters and lr_decay_iters, use cosine smoothly decay to go down from learning_rate to min_lr
+    # between warmup_iters and lr_decay_iters, use cosine smooth decay to go down from learning_rate to min_lr
     decay_ratio = (iter - warmup_iters) / (lr_decay_iters - warmup_iters) # calculate progress between warmup_iters and lr_decay_iters
     assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # use cosine function to calculate learning rage coefficient (0 <= coeff <= 1)
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # use cosine function to calculate learning rate coefficient (0 <= coeff <= 1)
     return min_lr + coeff * (learning_rate - min_lr) # return final learning rate
 
 # weights and biases logging
