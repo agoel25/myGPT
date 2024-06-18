@@ -1,5 +1,4 @@
 import tiktoken
-import math
 import time
 import torch
 import torch.nn as nn
@@ -12,7 +11,7 @@ class DataLoaderLite:
         self.B = B
         self.T = T
 
-        with open('input.txt', 'r') as f:
+        with open('./data/vanillatext/input.txt', 'r') as f:
             text = f.read()
         enc = tiktoken.get_encoding('gpt2')
         tokens = enc.encode(text)
@@ -31,8 +30,6 @@ class DataLoaderLite:
         if self.current_position + (B*T+1) > len(self.tokens):
             self.current_position = 0
         return x, y
-
-# -----------------------------------------------------------------------------------------
 
 device = 'cpu'
 if torch.cuda.is_available():
@@ -75,34 +72,3 @@ for i in range(50):
     t1 = time.time()
     dt = (t1 - t0) * 1000
     print(f"step {i}, loss {loss.item():.6f}, norm: {norm:.4f}, time {dt:.2f}ms")
-
-import sys
-sys.exit(0)
-
-
-# prefix tokens
-tokens = torch.tensor(tokens, dtype=torch.long)
-tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
-x = tokens.to(device)
-
-num_return_sequences = 5
-max_length = 30
-
-# generate
-while x.size(1) < max_length:
-    with torch.no_grad():
-        logits = model(x)
-        # only use the logits in the last position
-        logits = logits[:, -1, :]
-        probs = F.softmax(logits, dim=-1)
-        # only keep the top 50 probabilities, remove lower ones to avoid model from getting sidetracked
-        # 50 is the default used by huggingface's pipeline so we use this too
-        topk_probs, topk_indeces = torch.topk(probs, 50, dim=-1)
-        ix = torch.multinomial(topk_probs, 1)
-        xcol = torch.gather(topk_indeces, -1, ix)
-        x = torch.cat((x, xcol), dim=1)
-
-for i in range(num_return_sequences):
-    tokens = x[i, :max_length].tolist()
-    decoded = enc.decode(tokens)
-    print("> " + decoded)
