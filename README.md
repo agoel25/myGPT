@@ -19,8 +19,11 @@ The model defined in `model.py` closely follows the transformer model defined in
 
 ## GPU and CUDA Optimizations:
 **Distributed data parallel:** 
+
 **Mixed precision:** The model uses both 16-bit and 32-bit floating points to reduce memory usage and accelerate training, as defined in NVIDIA's GPU guides. The mantissa of PyTorch tensor weights is truncated to drop the precision but still maintaining high quality.
+
 **Kernel fusion:** Python's interpreter introduces inefficiencies when performing arithmetic of PyTorch tensors, wherein it launches multiple kernels to evaluate every operation in a matrix/equation. Thus, `torch.compile` and flash attention are used to fuse these kernels - reducing computational overhead.
+
 **Smart numbers:** Numbers are intentionally chosen to have as many powers of two as possible since most GPUs are more efficient at processing in 2^n batches. This is the reason for the model's overall token count differing from OpenAI's implementation (dummy tokens were added to increase efficiency.)
 
 
