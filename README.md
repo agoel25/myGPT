@@ -1,11 +1,15 @@
 # myGPT
-My implementation of a generative pre-trained transformer (that actually beats OpenAI's comparative GPT-2 model in accuracy).
+This is my implementation of a generative pre-trained transformer (that actually beats OpenAI's comparative GPT-2 model in accuracy).
 
 Here is a sample interaction with myGPT:
 ```
 Prompt: What is a neural network?
 
-Response: A neural network (or neural network model) is a statistical model, which, when manipulated by a computer, performs an action. These models were originally devised in the 1950s by John von Neumann. They were used for complex behavioral tasks such as speech recognition. Many popular networks and algorithms, such as the one used to identify faces in images, were derived from these models. (truncated for readability)
+Response: A neural network (or neural network model) is a statistical model, which, when
+manipulated by a computer, performs an action. These models were originally devised in the
+1950s by John von Neumann. They were used for complex behavioral tasks such as speech
+recognition. Many popular networks and algorithms, such as the one used to identify faces
+in images, were derived from these models. (truncated for readability)
 ```
 
 This repository is a one stop shop to understand how ChatGPT works behind the curtains - from model definition (`model.py`), to training (`training.py`), to CUDA optimization.
