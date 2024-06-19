@@ -14,10 +14,55 @@ recognition. Many popular networks and algorithms, such as the one used to ident
 in images, were derived from these models. (truncated for readability)
 ```
 
+## Quick Start
+**Install dependencies**
+```
+pip install torch numpy transformers datasets tiktoken wandb tqdm
+```
+
+**Tokenize the dataset**
+
+Tokenization breaks down the text into small pieces, these pieces are what the language model tries to contextualize and to predict. I am using the [Tiktoken](https://github.com/openai/tiktoken) tokenizer and the [OpenWebText](https://openwebtext2.readthedocs.io/en/latest/) dataset as this is the closest reproduction of OpenAI's GPT setup. This creates the train and validation splits of our dataset and stores them in two binary files: `train.bin` and `val.bin`.
+```
+python data/openwebtext/prepare.py
+```
+
+**Train the model**
+
+Training the model heavily depends on the type of hardware the code runs on, every hardware has slightly different commands to initiate training. The configuration parameters can be adjusted depending on the power of processors.
+
+If you do not have a GPU, you can use [lambdalabs.com](https://lambdalabs.com/) to train your models on the cloud. 
+
+I have a normal CPU
+```
+python train.py config/train_gpt2.py --device=cpu --compile=False --block_size=256 --batch_size=4 --n_layer=4 --n_head=4
+```
+
+I have an Apple Silicone CPU (brrr)
+```
+python train.py config/train_gpt2.py --device=mps --compile=False --batch_size=4
+```
+
+I have a GPU (brrrrrr)
+```
+python train.py config/train_gpt2.py --device=cuda
+```
+
+I have a cluster environment with multiple GPU nodes (brrrrrrrrrrrr)
+```
+# MULTIPLE NODES
+torchrun --standalone --nproc_per_node=[num_proc] train.py config/train_gpt2.py
+
+# CLUSTER ENVIRONMENT
+# Run on the first (master) node:
+torchrun --nproc_per_node=[num_proc] --nnodes=[num_nodes] --node_rank=0 --master_addr=[ip_addr] --master_port=[port] train.py
+# Run on the worker node:
+torchrun --nproc_per_node=[num_proc] --nnodes=[num_nodes] --node_rank=1 --master_addr=[ip_addr] --master_port=[port] train.py
+```
+This will run for around 5 days on an NVIDIA 8X A100 GPU. 
+
 ## Model
 The model closely follows the transformer model defined in the [Attention Is All You Need](https://arxiv.org/abs/1706.03762) paper. However, the encoder part has been omitted due to lack of resources - making this is a decoder-only transformer. This makes the model more of a "text completer" instead of a "question answerer". Making the model a "question answerer" requires a fine-tuning stage with (according to my understanding of OpenAI's process) a big manual overhead.
-
-
 
 ## GPU and CUDA Optimizations
 **Distributed data parallel:** DDP is a data parallelism technique which helps train models across multiple machines. This is a multiplicative improvement in computation and efficiency. Some environment variables need to be book-kept for process logistics but PyTorch helps with that.
