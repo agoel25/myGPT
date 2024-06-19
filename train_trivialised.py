@@ -38,9 +38,9 @@ elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
     device = 'mps'
 print(f"Using device {device}")
 
-torch.manual_seed(42)
+torch.manual_seed(2506)
 if torch.cuda.is_available():
-    torch.cuda.manual_seed(42)
+    torch.cuda.manual_seed(2506)
 
 train_loader = DataLoaderLite(B=4, T=32)
 
