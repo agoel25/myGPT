@@ -1,3 +1,7 @@
+"""
+Trivialised GPT model definition, same as model.py but with no optimization code for better readability.
+"""
+
 from dataclasses import dataclass
 import math
 import torch

@@ -1,3 +1,7 @@
+"""
+Trivialised GPT training script, same as train.py but with no optimization code for better readability.
+"""
+
 import tiktoken
 import time
 import torch
