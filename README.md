@@ -77,7 +77,14 @@ This will run for around 5 days on an NVIDIA 8X A100 GPU and go down to a loss o
 
 **Sample from the model**
 
-The `sample.py` script is capable of either generating samples from OpenAI's GPT-2 models or the model trained by you. 
+The `sample.py` script is capable of either generating samples from OpenAI's GPT-2 models or the model trained by you. Below is an example command to sample from the model. It uses OpenAI's gpt2-xl model to generate text.
+```
+python sample.py --init_from=gpt2-xl --start=[your_prompt]
+```
+To sample from the model you trained, simply run
+```
+python sample.py
+```
 
 ## References
 1. GPT-2 paper: [Attention Is All You Need](https://arxiv.org/abs/1706.03762)
