@@ -86,7 +86,7 @@ To sample from the model you trained, simply run
 python sample.py
 ```
 
-Lastly, if you are a pytorch beginner, it is advised to refer to `model_trivialised.py` and `train_trivialised.py` instead of the main model and train files. They focus on the main code while omitting a lot of the optimization code. Therefore, they will be much easier to understand. However, they cannot be trained on our OpenWebText dataset due since the code is not optimized.
+Lastly, if you are a pytorch beginner, it is advised to refer to `model_trivialised.py` and `train_trivialised.py` instead of the main model and train files. They focus on the main code while omitting a lot of the optimization code. Therefore, they will be much easier to understand. However, they cannot be trained on our OpenWebText dataset since the code is not optimized.
 
 ## References
 1. GPT-2 paper: [Attention Is All You Need](https://arxiv.org/abs/1706.03762)
