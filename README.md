@@ -1,7 +1,7 @@
 # myGPT
 My implementation of a generative pre-trained transformer (that actually beats OpenAI's GPT-2 125M parameter model in accuracy).
 
-This repository is a one stop shop to understand how ChatGPT works behind the curtains - from model definition `model.py`, to training `training.py`, to CUDA optimization. The model is currently setup to reproduce OpenAI's GPT-2, however the code can easily be configured to train new models or finetune pretrained models on different datasets.
+This repository is a one stop shop to understand how ChatGPT works behind the curtains - from model definition `model.py`, to training `training.py`, to optimization. The model is currently setup to reproduce OpenAI's GPT-2, however the code can easily be configured to train new models or finetune pretrained models on different datasets.
 
 Here is a sample interaction with myGPT:
 ```
